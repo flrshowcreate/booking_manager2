@@ -1,0 +1,326 @@
+// This is your Prisma schema file
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  AGENT
+  READ_ONLY
+  EXTERNAL
+}
+
+enum CompanyType {
+  PROMOTER
+  VENUE
+  OTHER
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  CONTRACT_SIGNED
+  FIRST_INVOICE_PAID
+  ALL_PAID
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIAL
+  PAID
+  OVERDUE
+}
+
+enum FileType {
+  CONTRACT
+  FIRST_INVOICE
+  FINAL_INVOICE
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  name          String?
+  password      String
+  role          UserRole       @default(AGENT)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  
+  uploadedFiles EventFile[]
+  assignedTasks Task[]         @relation("AssignedTasks")
+  activityLogs  ActivityLog[]
+  guestlists    Guestlist[]
+  accounts      Account[]
+  sessions      Session[]
+  
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Company {
+  id        String      @id @default(cuid())
+  name      String
+  type      CompanyType
+  tags      String[]
+  blocklist Boolean     @default(false)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  
+  contacts  Contact[]
+  venues    Venue[]
+  events    Event[]     @relation("PromoterEvents")
+  
+  @@map("companies")
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  firstName String
+  lastName  String
+  email     String?
+  phone     String?
+  companyId String?
+  notes     String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  
+  @@map("contacts")
+}
+
+model Artist {
+  id                   String   @id @default(cuid())
+  name                 String
+  defaultCommissionPct Float    @default(10.0)
+  tags                 String[]
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  
+  events               Event[]
+  
+  @@map("artists")
+}
+
+model Venue {
+  id        String   @id @default(cuid())
+  name      String
+  address   String?
+  city      String?
+  country   String?
+  lat       Float?
+  lng       Float?
+  capacity  Int?
+  companyId String?
+  placeId   String?  // Google Places ID
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  events    Event[]
+  
+  @@map("venues")
+}
+
+model Event {
+  id                    String         @id @default(cuid())
+  artistId              String
+  promoterId            String
+  venueId               String?
+  dateStart             DateTime
+  dateEnd               DateTime
+  timezone              String         @default("Europe/Bucharest")
+  bookingStatus         BookingStatus  @default(PENDING)
+  paymentStatus         PaymentStatus?
+  grossRevenue          Float?
+  commissionPct         Float          @default(10.0)
+  notes                 String?        @db.Text
+  exclusivityRadiusKm   Float?
+  overrideReason        String?        @db.Text
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  
+  artist                Artist         @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  promoter              Company        @relation("PromoterEvents", fields: [promoterId], references: [id], onDelete: Cascade)
+  venue                 Venue?         @relation(fields: [venueId], references: [id], onDelete: SetNull)
+  
+  files                 EventFile[]
+  invoices              Invoice[]
+  tasks                 Task[]
+  guestlists            Guestlist[]
+  activityLogs          ActivityLog[]
+  
+  @@index([artistId, dateStart, dateEnd])
+  @@index([bookingStatus, paymentStatus])
+  @@map("events")
+}
+
+model EventFile {
+  id         String   @id @default(cuid())
+  eventId    String
+  type       FileType
+  url        String
+  filename   String
+  mimeType   String
+  size       Int
+  uploadedBy String
+  createdAt  DateTime @default(now())
+  
+  event      Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  uploader   User     @relation(fields: [uploadedBy], references: [id])
+  
+  @@map("event_files")
+}
+
+model Invoice {
+  id          String        @id @default(cuid())
+  eventId     String
+  number      String        @unique
+  issueDate   DateTime
+  dueDate     DateTime
+  currency    String        @default("RON")
+  subtotal    Float
+  vatPct      Float         @default(19.0)
+  total       Float
+  status      InvoiceStatus @default(DRAFT)
+  pdfUrl      String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  payments    Payment[]
+  lineItems   InvoiceLineItem[]
+  
+  @@map("invoices")
+}
+
+model InvoiceLineItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  description String
+  quantity    Float   @default(1)
+  unitPrice   Float
+  total       Float
+  
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  @@map("invoice_line_items")
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  invoiceId String
+  amount    Float
+  date      DateTime
+  method    String?
+  note      String?  @db.Text
+  createdAt DateTime @default(now())
+  
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  
+  @@map("payments")
+}
+
+model Task {
+  id         String     @id @default(cuid())
+  eventId    String?
+  title      String
+  dueDate    DateTime?
+  status     TaskStatus @default(TODO)
+  assigneeId String?
+  notes      String?    @db.Text
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  
+  event      Event?     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  assignee   User?      @relation("AssignedTasks", fields: [assigneeId], references: [id], onDelete: SetNull)
+  
+  @@map("tasks")
+}
+
+model Guestlist {
+  id        String   @id @default(cuid())
+  eventId   String
+  name      String
+  spots     Int      @default(1)
+  createdBy String
+  notes     String?  @db.Text
+  createdAt DateTime @default(now())
+  
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  creator   User     @relation(fields: [createdBy], references: [id])
+  
+  @@map("guestlists")
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  action     String
+  actorId    String
+  diff       Json?
+  timestamp  DateTime @default(now())
+  
+  actor      User     @relation(fields: [actorId], references: [id])
+  event      Event?   @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  
+  @@index([entityType, entityId])
+  @@map("activity_logs")
+}
+
+model Settings {
+  id    String @id @default(cuid())
+  key   String @unique
+  value Json
+  
+  @@map("settings")
+}
